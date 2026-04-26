@@ -1,0 +1,7 @@
+target
+.env
+.env.*
+*.local
+.DS_Store
+adapter.toml
+.codex-responses-adapter.toml

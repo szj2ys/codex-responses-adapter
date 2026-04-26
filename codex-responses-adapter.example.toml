@@ -1,0 +1,86 @@
+# codex-responses-adapter 示例配置
+#
+# 使用方法:
+#   cp codex-responses-adapter.example.toml ~/.codex-responses-adapter.toml
+#
+# 默认会自动读取 ~/.codex-responses-adapter.toml
+# 如果不使用配置文件, 也可以用 CLI 参数:
+#   codex-responses-adapter --upstream-url ... --provider glm ...
+
+[server]
+allow_downgrade = true
+port = 3000
+
+# ============================================================
+# 上游 Provider 定义
+# ============================================================
+
+[providers.glm]
+api_key_env = "GLM_API_KEY"
+name = "智谱 GLM"
+upstream_url = "https://open.bigmodel.cn/api/paas/v4"
+# api_key = "直接写 key (不推荐, 建议用 env)"
+provider_type = "glm"
+
+[providers.minimax]
+api_key_env = "MINIMAX_API_KEY"
+name = "MiniMax"
+provider_type = "minimax"
+upstream_url = "https://api.minimaxi.com/v1"
+
+# ============================================================
+# 模型路由映射
+#
+# Codex 发来的 model 名 → 实际调用的 provider + model
+# routes 中第一个是主路由, 后续为 fallback (按顺序尝试)
+# ============================================================
+
+[[models]]
+name = "o4-mini" # Codex 侧使用的模型名
+routes = [
+    { provider = "glm", model = "glm-4-flash" },
+    { provider = "minimax", model = "MiniMax-Text-01" },
+]
+
+[[models]]
+name = "o3"
+routes = [
+    { provider = "glm", model = "glm-4" },
+    { provider = "minimax", model = "MiniMax-M1" },
+]
+
+[[models]]
+name = "gpt-4o"
+routes = [
+    { provider = "glm", model = "glm-4-plus" },
+    { provider = "minimax", model = "MiniMax-M1" },
+]
+
+# 未在上面列出的模型名, 会使用 default_route (如果设置)
+[default_route]
+model = "glm-4-flash"
+provider = "glm"
+
+[web_search]
+enabled = false
+strategy = "prefer_passthrough"
+backend = "tavily"
+max_results = 5
+timeout_seconds = 10
+allow_backend_fallback = true
+
+[web_search.tavily]
+api_key_env = "TAVILY_API_KEY"
+
+[web_search.brave]
+api_key_env = "BRAVE_SEARCH_API_KEY"
+
+[web_search.custom]
+url = "https://search.example.com/query"
+method = "POST"
+headers = { Authorization = "Bearer ${SEARCH_API_KEY}" }
+body_template = "{\"query\":\"{{query}}\",\"limit\":{{max_results}}}"
+results_path = "data.items"
+title_path = "title"
+url_path = "url"
+snippet_path = "snippet"
