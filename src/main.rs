@@ -15,27 +15,38 @@ mod response_converter;
 mod types;
 mod web_search;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use providers::ProviderKind;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-/// Translate Responses API to Chat Completions API for third-party LLMs.
-///
-/// Two modes:
-///   1. Config file: --config <path> or ~/.codex-responses-adapter.toml
-///   2. CLI args:    --upstream-url ... --provider glm (single provider)
 #[derive(Debug, Parser)]
 #[command(
     name = "codex-responses-adapter",
     about = "Translate Responses API to Chat Completions API for third-party LLMs"
 )]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Run the adapter server.
+    #[command(name = "run")]
+    Run(RunArgs),
+    /// Interactive setup: create ~/.codex-responses-adapter.toml.
+    #[command(name = "setup")]
+    Setup,
+}
+
+#[derive(Debug, Parser)]
+struct RunArgs {
     /// Optional path to the TOML config file.
     ///
     /// If omitted, the adapter will automatically load
     /// ~/.codex-responses-adapter.toml when that file exists. CLI args
-    /// (--upstream-url etc.) are ignored whenever a config file is loaded.
+    /// (--base-url etc.) are ignored whenever a config file is loaded.
     #[arg(long)]
     config: Option<String>,
 
@@ -46,7 +57,7 @@ struct Args {
 
     /// Base URL of the upstream Chat Completions API.
     #[arg(long)]
-    upstream_url: Option<String>,
+    base_url: Option<String>,
 
     /// Target provider: glm, minimax, vllm, or custom.
     #[arg(long, default_value = "custom")]
@@ -82,25 +93,29 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let args = Args::parse();
+    let cli = Cli::parse();
 
+    match cli.command {
+        Command::Setup => run_setup().await,
+        Command::Run(args) => run_server_with_args(args).await,
+    }
+}
+
+async fn run_server_with_args(args: RunArgs) -> anyhow::Result<()> {
     let config_path = args
         .config
         .clone()
         .or_else(default_config_path_if_exists);
 
     let server_config = if let Some(config_path) = config_path {
-        // ---- Config file mode ----
         info!("loading config from: {config_path}");
         let adapter_config = config::AdapterConfig::load(&config_path)?;
         handler::ServerConfig::from_config(adapter_config)?
     } else {
-        // ---- CLI mode ----
-        let upstream_url = args
-            .upstream_url
-            .ok_or_else(|| anyhow::anyhow!("--upstream-url is required when not using --config"))?;
+        let base_url = args
+            .base_url
+            .ok_or_else(|| anyhow::anyhow!("--base-url is required when not using --config"))?;
 
-        // Resolve API key: prefer env var, fall back to direct value.
         let api_key = if let Some(env_var) = &args.api_key_env {
             let key = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty());
             if key.is_none() {
@@ -115,7 +130,6 @@ async fn main() -> anyhow::Result<()> {
 
         let provider = ProviderKind::from_str(&args.provider);
 
-        // Parse model map
         let model_map: std::collections::HashMap<String, String> = args
             .model_map
             .as_deref()
@@ -136,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
 
         handler::ServerConfig::from_cli(
             args.port,
-            upstream_url,
+            base_url,
             api_key,
             provider,
             args.allow_downgrade,
@@ -148,8 +162,133 @@ async fn main() -> anyhow::Result<()> {
     handler::run_server(server_config).await
 }
 
+// ---------------------------------------------------------------------------
+// Setup subcommand
+// ---------------------------------------------------------------------------
+
+use std::io::{self, Write};
+
+const DEFAULT_CONFIG_FILENAME: &str = ".codex-responses-adapter.toml";
+
+async fn run_setup() -> anyhow::Result<()> {
+    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME env var not set"))?;
+    let config_path = std::path::Path::new(&home).join(DEFAULT_CONFIG_FILENAME);
+
+    println!("Config path: {}", config_path.display());
+
+    if config_path.exists() {
+        print!("Config already exists. Overwrite? [y/N]: ");
+        io::stdout().flush()?;
+        let mut response = String::new();
+        io::stdin().read_line(&mut response)?;
+        let response = response.trim().to_lowercase();
+        if response != "y" && response != "yes" {
+            println!("Skipped. Existing config: {}", config_path.display());
+            return Ok(());
+        }
+    }
+
+    print!("Base URL (e.g. https://open.bigmodel.cn/api/paas/v4): ");
+    io::stdout().flush()?;
+    let mut base_url = String::new();
+    io::stdin().read_line(&mut base_url)?;
+    let base_url = base_url.trim();
+    if base_url.is_empty() {
+        anyhow::bail!("Base URL is required");
+    }
+
+    print!("API Key: ");
+    io::stdout().flush()?;
+    let api_key = read_hidden_input()?;
+    if api_key.trim().is_empty() {
+        anyhow::bail!("API Key is required");
+    }
+
+    let config_content = format!(
+        r#"[server]
+allow_downgrade = true
+port = 3000
+
+[providers.default]
+base_url = "{}"
+api_key = "{}"
+provider_type = "custom"
+"#,
+        base_url,
+        api_key.trim()
+    );
+
+    std::fs::write(&config_path, config_content)?;
+    println!("\nConfig written to {}", config_path.display());
+    println!("Run: codex-responses-adapter");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_hidden_input() -> io::Result<String> {
+    use std::os::unix::io::AsRawFd;
+    // Try to use /dev/tty for hidden input; fall back to plain stdin if not a TTY.
+    match std::fs::File::open("/dev/tty") {
+        Ok(tty) => {
+            let fd = tty.as_raw_fd();
+            let mut termios = unsafe {
+                let mut t = std::mem::zeroed();
+                if libc::tcgetattr(fd, &mut t) != 0 {
+                    // Not a TTY, fall through to plain read
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
+                    return Ok(input);
+                }
+                t
+            };
+            let original = termios;
+            termios.c_lflag &= !libc::ECHO;
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios); }
+
+            let mut input = String::new();
+            let result = io::stdin().read_line(&mut input);
+
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original); }
+            println!();
+            result?;
+            Ok(input)
+        }
+        Err(_) => {
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            Ok(input)
+        }
+    }
+}
+#[cfg(windows)]
+fn read_hidden_input() -> io::Result<String> {
+    use std::os::windows::io::AsRawHandle;
+    let handle = io::stdin().as_raw_handle();
+    let mut mode: u32 = 0;
+    unsafe {
+        winapi::um::consoleapi::GetConsoleMode(handle, &mut mode);
+        winapi::um::consoleapi::SetConsoleMode(handle, mode & !0x0004);
+    }
+    let mut input = String::new();
+    let result = io::stdin().read_line(&mut input);
+    unsafe {
+        winapi::um::consoleapi::SetConsoleMode(handle, mode);
+    }
+    println!();
+    result?;
+    Ok(input)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_hidden_input() -> io::Result<String> {
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input)
+}
+
 fn default_config_path_if_exists() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
-    let path = std::path::Path::new(&home).join(".codex-responses-adapter.toml");
+    let path = std::path::Path::new(&home).join(DEFAULT_CONFIG_FILENAME);
     path.is_file().then(|| path.to_string_lossy().into_owned())
 }
