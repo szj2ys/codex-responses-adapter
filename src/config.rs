@@ -57,7 +57,7 @@ fn default_port() -> u16 {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProviderConfig {
     pub name: Option<String>,
-    pub upstream_url: String,
+    pub base_url: String,
     /// Environment variable name containing the API key.
     pub api_key_env: Option<String>,
     /// Direct API key value (not recommended).
@@ -250,13 +250,13 @@ allow_downgrade = true
 
 [providers.glm]
 name = "GLM"
-upstream_url = "https://open.bigmodel.cn/api/paas/v4"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
 api_key = "test-key"
 provider_type = "glm"
 
 [providers.openai]
 name = "OpenAI"
-upstream_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com/v1"
 provider_type = "custom"
 use_incoming_auth = true
 
@@ -373,7 +373,7 @@ model = "glm-4-flash"
     fn test_provider_resolve_api_key_direct() {
         let pc = ProviderConfig {
             name: None,
-            upstream_url: "http://example.com".to_string(),
+            base_url: "http://example.com".to_string(),
             api_key_env: None,
             api_key: Some("direct-key".to_string()),
             provider_type: "custom".to_string(),
@@ -387,7 +387,7 @@ model = "glm-4-flash"
     fn test_provider_resolve_api_key_none() {
         let pc = ProviderConfig {
             name: None,
-            upstream_url: "http://example.com".to_string(),
+            base_url: "http://example.com".to_string(),
             api_key_env: Some("NONEXISTENT_ENV_VAR_FOR_TEST".to_string()),
             api_key: None,
             provider_type: "custom".to_string(),
@@ -401,7 +401,7 @@ model = "glm-4-flash"
     fn test_use_incoming_auth_defaults_false() {
         let toml_str = r#"
 [providers.test]
-upstream_url = "http://example.com"
+base_url = "http://example.com"
 "#;
         let config: AdapterConfig = toml::from_str(toml_str).unwrap();
         assert!(!config.providers["test"].use_incoming_auth);

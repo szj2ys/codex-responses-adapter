@@ -78,7 +78,7 @@ pub struct ServerConfig {
 /// A fully resolved upstream provider, ready to make HTTP requests.
 pub struct UpstreamProvider {
     pub client: Client,
-    pub upstream_url: String,
+    pub base_url: String,
     pub api_key: Option<String>,
     pub capabilities: ProviderCapabilities,
     /// When true, forward the incoming Codex bearer token.
@@ -89,7 +89,7 @@ impl ServerConfig {
     /// Build from CLI args (single-provider mode).
     pub fn from_cli(
         port: u16,
-        upstream_url: String,
+        base_url: String,
         api_key: Option<String>,
         provider: ProviderKind,
         allow_downgrade: bool,
@@ -106,7 +106,7 @@ impl ServerConfig {
             "default".to_string(),
             UpstreamProvider {
                 client,
-                upstream_url,
+                base_url,
                 api_key,
                 capabilities,
                 use_incoming_auth: false,
@@ -173,7 +173,7 @@ impl ServerConfig {
                 name.clone(),
                 UpstreamProvider {
                     client,
-                    upstream_url: pc.upstream_url.clone(),
+                    base_url: pc.base_url.clone(),
                     api_key,
                     capabilities,
                     use_incoming_auth: pc.use_incoming_auth,
@@ -216,7 +216,7 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         };
         info!(
             "  provider '{}': {} (auth={})",
-            name, p.upstream_url, auth_mode
+            name, p.base_url, auth_mode
         );
     }
     info!("  model routes: {} entries", config.model_routes.len());
@@ -695,7 +695,7 @@ async fn forward_responses_passthrough(
     incoming_auth: &Option<String>,
     body_bytes: &Bytes,
 ) -> Result<reqwest::Response, AdapterError> {
-    let responses_url = format!("{}/responses", provider.upstream_url.trim_end_matches('/'));
+    let responses_url = format!("{}/responses", provider.base_url.trim_end_matches('/'));
     let mut upstream = provider.client.post(&responses_url);
 
     if provider.use_incoming_auth {
@@ -745,7 +745,7 @@ async fn send_chat_request(
 
     let chat_completions_url = format!(
         "{}/chat/completions",
-        provider.upstream_url.trim_end_matches('/')
+        provider.base_url.trim_end_matches('/')
     );
 
     let mut upstream = provider.client.post(&chat_completions_url);
@@ -1274,7 +1274,7 @@ mod tests {
     fn search_passthrough_requires_enabled_config_and_responses_support() {
         let mut provider = UpstreamProvider {
             client: Client::builder().build().unwrap(),
-            upstream_url: "https://api.openai.com/v1".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
             capabilities: ProviderKind::Openai.default_capabilities(),
             use_incoming_auth: true,
@@ -1311,7 +1311,7 @@ mod tests {
     fn force_backend_requires_backend_config() {
         let provider = UpstreamProvider {
             client: Client::builder().build().unwrap(),
-            upstream_url: "https://api.openai.com/v1".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
             capabilities: ProviderKind::Openai.default_capabilities(),
             use_incoming_auth: true,
@@ -1442,7 +1442,7 @@ mod tests {
     async fn replay_web_search_call_requires_query() {
         let provider = UpstreamProvider {
             client: Client::builder().build().unwrap(),
-            upstream_url: "https://example.com".to_string(),
+            base_url: "https://example.com".to_string(),
             api_key: None,
             capabilities: ProviderKind::Glm.default_capabilities(),
             use_incoming_auth: false,
@@ -1484,5 +1484,22 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("requires web_search_call.query"));
+    }
+
+    #[test]
+    fn test_passthrough_model_when_no_routes() {
+        let config = ServerConfig::from_cli(
+            3000,
+            "https://example.com/v1".to_string(),
+            Some("test-key".to_string()),
+            ProviderKind::Custom,
+            false,
+            std::collections::HashMap::new(),
+            None,
+        )
+        .unwrap();
+
+        assert!(config.model_routes.is_empty());
+        assert!(config.default_route.is_none());
     }
 }
