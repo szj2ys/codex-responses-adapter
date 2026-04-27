@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/codex-responses-adapter dist/
+          cd dist
+          tar czf "../codex-responses-adapter-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" codex-responses-adapter
+          cd ..
+          sha256sum "codex-responses-adapter-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" >> sha256sum.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: codex-responses-adapter-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            cp "$dir"*.tar.gz release/
+          done
+          cd release && sha256sum *.tar.gz > ../sha256sum.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/*.tar.gz
+            sha256sum.txt
+          generate_release_notes: true
+
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: szj2ys/homebrew-codex
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-codex
+
+      - name: Download release artifacts
+        run: |
+          mkdir -p artifacts
+          for target in x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            curl -sL "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/codex-responses-adapter-${{ github.ref_name }}-${target}.tar.gz" \
+              -o "artifacts/codex-responses-adapter-${{ github.ref_name }}-${target}.tar.gz"
+          done
+
+      - name: Compute sha256 and update formula
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION_NUM="${VERSION#v}"
+
+          SHA_MAC_INTEL=$(sha256sum artifacts/codex-responses-adapter-${VERSION}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_MAC_ARM=$(sha256sum artifacts/codex-responses-adapter-${VERSION}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_INTEL=$(sha256sum artifacts/codex-responses-adapter-${VERSION}-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM=$(sha256sum artifacts/codex-responses-adapter-${VERSION}-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+
+          sed -e "s/VERSION_NUM/${VERSION_NUM}/g" \
+              -e "s/VERSION/${VERSION}/g" \
+              -e "s/SHA_MAC_INTEL/${SHA_MAC_INTEL}/g" \
+              -e "s/SHA_MAC_ARM/${SHA_MAC_ARM}/g" \
+              -e "s/SHA_LINUX_INTEL/${SHA_LINUX_INTEL}/g" \
+              -e "s/SHA_LINUX_ARM/${SHA_LINUX_ARM}/g" \
+              scripts/homebrew-formula-template.rb > homebrew-codex/Formula/codex-responses-adapter.rb
+
+      - name: Commit and push formula
+        run: |
+          cd homebrew-codex
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/codex-responses-adapter.rb
+          git diff --cached --quiet || git commit -m "chore: update formula to ${{ github.ref_name }}"
+          git push
