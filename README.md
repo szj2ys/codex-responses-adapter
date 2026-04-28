@@ -87,7 +87,7 @@ Then start Codex normally. The adapter must be running before Codex launches.
 Without a config file, run in single-provider mode:
 
 ```bash
-codex-responses-adapter run \
+codex-responses-adapter \
   --base-url https://open.bigmodel.cn/api/paas/v4 \
   --api-key your-key
 ```
