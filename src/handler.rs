@@ -64,6 +64,7 @@ const LOG_UPSTREAM_REQUEST_ENV: &str = "CHAT_ADAPTER_PROXY_LOG_UPSTREAM_REQUEST"
 
 /// Configuration for the proxy server – built from CLI args or config file.
 pub struct ServerConfig {
+    pub host: String,
     pub port: u16,
     pub allow_downgrade: bool,
     pub web_search: WebSearchConfig,
@@ -88,6 +89,7 @@ pub struct UpstreamProvider {
 impl ServerConfig {
     /// Build from CLI args (single-provider mode).
     pub fn from_cli(
+        host: String,
         port: u16,
         base_url: String,
         api_key: Option<String>,
@@ -131,6 +133,7 @@ impl ServerConfig {
         });
 
         Ok(Self {
+            host,
             port,
             allow_downgrade,
             web_search: WebSearchConfig::default(),
@@ -187,6 +190,7 @@ impl ServerConfig {
         }
 
         Ok(Self {
+            host: config.server.host.clone(),
             port: config.server.port,
             allow_downgrade: config.server.allow_downgrade,
             web_search: config.web_search,
@@ -202,7 +206,8 @@ impl ServerConfig {
 // ---------------------------------------------------------------------------
 
 pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
+    let host: std::net::IpAddr = config.host.parse()?;
+    let addr = SocketAddr::from((host, config.port));
     let listener = TcpListener::bind(addr).await?;
     info!("codex-responses-adapter listening on http://{addr}");
 
@@ -1489,6 +1494,7 @@ mod tests {
     #[test]
     fn test_passthrough_model_when_no_routes() {
         let config = ServerConfig::from_cli(
+            "127.0.0.1".to_string(),
             6789,
             "https://example.com/v1".to_string(),
             Some("test-key".to_string()),

@@ -44,6 +44,10 @@ enum Command {
 
 #[derive(Debug, Parser)]
 struct ServerArgs {
+    /// Host to bind to.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
     /// Port to listen on.
     #[arg(long, default_value = "6789")]
     port: u16,
@@ -117,10 +121,12 @@ async fn run_server(args: ServerArgs) -> anyhow::Result<()> {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("--base-url is required when not using --config"))?;
 
+        let api_key = resolve_api_key(&args);
         handler::ServerConfig::from_cli(
+            args.host,
             args.port,
             base_url,
-            resolve_api_key(&args),
+            api_key,
             ProviderKind::from_str(&args.provider),
             args.allow_downgrade,
             parse_model_map(&args.model_map),
