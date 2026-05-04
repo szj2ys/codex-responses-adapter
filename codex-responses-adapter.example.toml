@@ -8,6 +8,7 @@
 #   codex-responses-adapter --upstream-url ... --provider glm ...
 
 [server]
+host = "0.0.0.0"
 allow_downgrade = true
 port = 6789
 

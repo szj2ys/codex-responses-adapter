@@ -19,6 +19,54 @@ To install from source:
 cargo install --git https://github.com/szj2ys/codex-responses-adapter
 ```
 
+## Docker
+
+Build and run with Docker:
+
+```bash
+docker build -t codex-responses-adapter .
+```
+
+### Run with config file
+
+```bash
+docker run -d \
+  --name codex-adapter \
+  -p 6789:6789 \
+  -v $(pwd)/config.toml:/app/config.toml \
+  -e RUST_LOG=info \
+  codex-responses-adapter \
+  --config /app/config.toml
+```
+
+### Run with CLI args (single provider)
+
+```bash
+docker run -d \
+  --name codex-adapter \
+  -p 6789:6789 \
+  -e API_KEY=your-api-key \
+  codex-responses-adapter \
+  --host 0.0.0.0 \
+  --base-url https://open.bigmodel.cn/api/paas/v4 \
+  --api-key $API_KEY
+```
+
+### docker-compose
+
+```yaml
+services:
+  adapter:
+    build: .
+    ports:
+      - "6789:6789"
+    volumes:
+      - ./codex-responses-adapter.toml:/app/config.toml
+    command: ["--config", "/app/config.toml"]
+```
+
+For Docker deployments, set `host = "0.0.0.0"` in your config (or pass `--host 0.0.0.0` via CLI) so the server accepts connections from outside the container.
+
 ## Setup
 
 ```bash
