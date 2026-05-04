@@ -50,7 +50,7 @@ impl Default for ServerSection {
 }
 
 fn default_port() -> u16 {
-    3000
+    6789
 }
 
 /// Configuration for a single upstream provider.
@@ -361,7 +361,7 @@ model = "glm-4-flash"
     fn test_server_defaults() {
         let toml_str = "[server]\n";
         let config: AdapterConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.server.port, 6789);
         assert!(!config.server.allow_downgrade);
         assert_eq!(
             config.web_search.strategy,

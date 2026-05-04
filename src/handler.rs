@@ -1489,7 +1489,7 @@ mod tests {
     #[test]
     fn test_passthrough_model_when_no_routes() {
         let config = ServerConfig::from_cli(
-            3000,
+            6789,
             "https://example.com/v1".to_string(),
             Some("test-key".to_string()),
             ProviderKind::Custom,

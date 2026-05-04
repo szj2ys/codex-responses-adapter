@@ -84,7 +84,7 @@ codex-responses-adapter setup    # interactive config generation
 ```toml
 [server]
 allow_downgrade = true
-port = 3000
+port = 6789
 
 [providers.default]
 base_url = "<user-input>"
@@ -148,7 +148,7 @@ codex-responses-adapter setup
 cat ~/.codex-responses-adapter.toml
 # Should contain the minimal config
 codex-responses-adapter
-# curl http://127.0.0.1:3000/health → {"status":"ok"}
+# curl http://127.0.0.1:6789/health → {"status":"ok"}
 ```
 
 ### 7.2 Model Passthrough

@@ -44,7 +44,7 @@ That's it. The generated config is minimal:
 ```toml
 [server]
 allow_downgrade = true
-port = 3000
+port = 6789
 
 [providers.default]
 base_url = "https://open.bigmodel.cn/api/paas/v4"
@@ -58,10 +58,10 @@ provider_type = "custom"
 codex-responses-adapter
 ```
 
-The server listens on `127.0.0.1:3000`. Verify it's running:
+The server listens on `127.0.0.1:6789`. Verify it's running:
 
 ```bash
-curl http://127.0.0.1:3000/health
+curl http://127.0.0.1:6789/health
 # {"status":"ok"}
 ```
 
@@ -75,7 +75,7 @@ model_provider = "responses-adapter"
 
 [model_providers.responses-adapter]
 name = "Responses Adapter"
-base_url = "http://127.0.0.1:3000/v1"
+base_url = "http://127.0.0.1:6789/v1"
 wire_api = "responses"
 env_key = "ADAPTER_KEY"
 ```
@@ -138,7 +138,7 @@ Use `POST /v1/{provider}/responses` to bypass routing and pin requests to one pr
 ```toml
 [model_providers.adapter-glm]
 name = "Adapter GLM"
-base_url = "http://127.0.0.1:3000/v1/glm"
+base_url = "http://127.0.0.1:6789/v1/glm"
 wire_api = "responses"
 env_key = "GLM_API_KEY"
 ```

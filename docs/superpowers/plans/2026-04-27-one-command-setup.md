@@ -57,7 +57,7 @@ struct RunArgs {
     #[arg(long)]
     config: Option<String>,
 
-    #[arg(long, default_value = "3000")]
+    #[arg(long, default_value = "6789")]
     port: u16,
 
     #[arg(long)]
@@ -208,7 +208,7 @@ async fn run_setup() -> anyhow::Result<()> {
     let config_content = format!(
         r#"[server]
 allow_downgrade = true
-port = 3000
+port = 6789
 
 [providers.default]
 base_url = "{}"
@@ -331,7 +331,7 @@ Add to `src/handler.rs` in the existing `#[cfg(test)]` section:
 #[test]
 fn test_passthrough_model_when_no_routes() {
     let config = ServerConfig::from_cli(
-        3000,
+        6789,
         "https://example.com/v1".to_string(),
         Some("test-key".to_string()),
         ProviderKind::Custom,

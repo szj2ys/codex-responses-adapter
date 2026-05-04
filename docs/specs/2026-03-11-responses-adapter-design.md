@@ -301,7 +301,7 @@ model_provider = "glm-adapter"
 
 [model_providers.glm-adapter]
 name = "GLM Adapter"
-base_url = "http://localhost:3000/v1"
+base_url = "http://localhost:6789/v1"
 env_key = "GLM_API_KEY"
 wire_api = "responses"
 
@@ -462,7 +462,7 @@ provider 'openai': https://api.openai.com/v1 (auth=user_account)
 | `UPSTREAM_API_KEY` | Yes | - | Third-party API key |
 | `PROVIDER` | Yes | "glm" | Target provider (`glm` / `minimax` / `custom`) |
 | `ALLOW_DOWNGRADE` | No | false | Whether capability downgrade is allowed |
-| `LISTEN` | No | "127.0.0.1:3000" | Listen address |
+| `LISTEN` | No | "127.0.0.1:6789" | Listen address |
 
 ### 8.2 Startup Examples
 
@@ -562,8 +562,8 @@ codex --profile minimax-only   # force MiniMax
 ```bash
 cargo test                                        # 21 tests
 codex exec --profile glm "Say hello"              # e2e
-curl http://127.0.0.1:3000/health                 # health check
-curl -X POST http://127.0.0.1:3000/v1/glm/responses \
+curl http://127.0.0.1:6789/health                 # health check
+curl -X POST http://127.0.0.1:6789/v1/glm/responses \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-5.4","input":"hi","stream":false}'
 ```

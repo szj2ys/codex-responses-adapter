@@ -45,7 +45,7 @@ enum Command {
 #[derive(Debug, Parser)]
 struct ServerArgs {
     /// Port to listen on.
-    #[arg(long, default_value = "3000")]
+    #[arg(long, default_value = "6789")]
     port: u16,
 
     /// Optional path to the TOML config file.
@@ -197,7 +197,7 @@ fn run_setup() -> anyhow::Result<()> {
     let config = format!(
         r#"[server]
 allow_downgrade = true
-port = 3000
+port = 6789
 
 [providers.default]
 base_url = "{base_url}"
