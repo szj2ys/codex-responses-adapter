@@ -6,6 +6,7 @@ mod handler;
 mod providers;
 mod request_converter;
 mod response_converter;
+mod tool_id_manager;
 mod types;
 mod web_search;
 
