@@ -4,7 +4,7 @@ use reqwest::Client;
 use reqwest::Method;
 use serde_json::Value;
 use std::time::Instant;
-use tracing::info;
+use tracing::debug;
 
 use crate::config::CustomSearchConfig;
 use crate::config::WebSearchBackend;
@@ -51,7 +51,7 @@ pub async fn search(
         )
     })?;
 
-    info!(
+    debug!(
         "web_search backend selected: backend='{}' query='{}' max_results={}",
         backend_name(backend),
         req.query,
@@ -102,7 +102,7 @@ async fn search_tavily(
     }
 
     let result = parse_tavily_response(&body, req.query)?;
-    info!(
+    debug!(
         "web_search backend success: backend='tavily' results={} duration_ms={}",
         result.results.len(),
         started_at.elapsed().as_millis()
@@ -147,7 +147,7 @@ async fn search_brave(
     }
 
     let result = parse_brave_response(&body, req.query)?;
-    info!(
+    debug!(
         "web_search backend success: backend='brave' results={} duration_ms={}",
         result.results.len(),
         started_at.elapsed().as_millis()
@@ -196,7 +196,7 @@ async fn search_custom(
     }
 
     let result = parse_custom_response(&body, custom, req.query)?;
-    info!(
+    debug!(
         "web_search backend success: backend='custom' results={} duration_ms={}",
         result.results.len(),
         started_at.elapsed().as_millis()

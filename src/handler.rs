@@ -57,6 +57,7 @@ use crate::web_search;
 use crate::web_search::ADAPTER_WEB_SEARCH_TOOL_NAME;
 
 const LOG_UPSTREAM_REQUEST_ENV: &str = "CHAT_ADAPTER_PROXY_LOG_UPSTREAM_REQUEST";
+const LOG_UPSTREAM_RESPONSE_ENV: &str = "CHAT_ADAPTER_PROXY_LOG_UPSTREAM_RESPONSE";
 
 // ---------------------------------------------------------------------------
 // Server configuration (from CLI or config file)
@@ -290,7 +291,7 @@ async fn handle_request(
                         &json!({"error": format!("provider '{}' not found. available: {:?}", provider_name, state.providers.keys().collect::<Vec<_>>())}),
                     ))
                 } else {
-                    info!("path override: forcing provider '{provider_name}'");
+                    debug!("path override: forcing provider '{provider_name}'");
                     Ok(handle_responses(req, state, Some(provider_name)).await)
                 }
             } else {
@@ -401,7 +402,7 @@ async fn handle_responses(
         };
 
         if i == 0 {
-            info!(
+            debug!(
                 "routing '{}' → provider '{}' model '{}'",
                 codex_model, route.provider, route.model
             );
@@ -413,14 +414,14 @@ async fn handle_responses(
         }
 
         if is_search_request {
-            info!(
+            debug!(
                 "web_search detected: strategy='{}' backend='{}'",
                 search_strategy_name(&state.web_search),
                 configured_backend_name(&state.web_search)
             );
             match search_strategy_for_route(&state.web_search, provider) {
                 SearchExecution::Passthrough => {
-                    info!(
+                    debug!(
                         "search request: passthrough to provider '{}' /responses",
                         route.provider
                     );
@@ -461,7 +462,7 @@ async fn handle_responses(
         let normalized_req = if is_search_request {
             match search_strategy_for_route(&state.web_search, provider) {
                 SearchExecution::AdapterManaged => {
-                    info!(
+                    debug!(
                         "web_search using adapter-managed backend '{}' on provider '{}'",
                         configured_backend_name(&state.web_search),
                         route.provider
@@ -528,7 +529,7 @@ async fn handle_responses(
             if is_streaming {
                 return handle_streaming(upstream_resp).await;
             } else {
-                return handle_non_streaming(upstream_resp).await;
+                return handle_non_streaming(upstream_resp, &route.provider).await;
             }
         }
     }
@@ -655,7 +656,7 @@ async fn replay_web_search_calls(
                     .or_else(|| id.clone())
                     .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4()));
 
-                info!(
+                debug!(
                     "web_search replaying completed historical call: call_id='{}' query='{}' backend='{}'",
                     tool_call_id,
                     query,
@@ -802,7 +803,7 @@ async fn execute_adapter_managed_search(
     chat_req.stream = false;
 
     for round in 0..MAX_SEARCH_ROUNDS {
-        info!(
+        debug!(
             "web_search adapter round {}/{} on provider '{}'",
             round + 1,
             MAX_SEARCH_ROUNDS,
@@ -812,14 +813,14 @@ async fn execute_adapter_managed_search(
         let chat_resp = parse_chat_response(upstream_resp).await?;
 
         let Some(search_calls) = extract_adapter_search_calls(&chat_resp)? else {
-            info!(
+            debug!(
                 "web_search adapter finished without further tool calls on round {}",
                 round + 1
             );
             return Ok(chat_resp);
         };
 
-        info!(
+        debug!(
             "web_search adapter received {} tool call(s) on round {}",
             search_calls.len(),
             round + 1
@@ -838,7 +839,7 @@ async fn execute_adapter_managed_search(
             )
             .await?;
 
-            info!(
+            debug!(
                 "web_search query completed: backend='{}' query='{}' results={} duration_ms={}",
                 search_resp.provider,
                 search_resp.query,
@@ -990,20 +991,32 @@ fn extract_adapter_search_calls(
 // Response handling (unchanged)
 // ---------------------------------------------------------------------------
 
-async fn handle_non_streaming(upstream_resp: reqwest::Response) -> Response<BoxBody> {
+async fn handle_non_streaming(
+    upstream_resp: reqwest::Response,
+    provider_name: &str,
+) -> Response<BoxBody> {
     let body = match upstream_resp.text().await {
         Ok(b) => b,
         Err(e) => {
+            error!("failed to read upstream response body from provider '{provider_name}': {e}");
             return adapter_error_response(AdapterError::TransportError(format!(
                 "failed to read upstream: {e}"
             )));
         }
     };
 
+    maybe_log_upstream_response(provider_name, &body);
+
     let chat_resp: ChatCompletionsResponse = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => {
-            error!("failed to parse upstream response: {e}, body: {body}");
+            // Show first 500 chars of body for debugging
+            let preview = if body.len() > 500 {
+                format!("{}... [truncated]", &body[..500])
+            } else {
+                body.clone()
+            };
+            error!("failed to parse upstream response from provider '{provider_name}': {e}. Response body preview: {preview}");
             return adapter_error_response(AdapterError::ParseError(format!(
                 "invalid upstream response: {e}"
             )));
@@ -1035,7 +1048,7 @@ async fn handle_streaming(upstream_resp: reqwest::Response) -> Response<BoxBody>
             let chunk = match chunk_result {
                 Ok(c) => c,
                 Err(e) => {
-                    error!("upstream stream error: {e}");
+                    error!("upstream stream error from provider: {e}");
                     break;
                 }
             };
@@ -1155,6 +1168,27 @@ fn maybe_log_upstream_request(
             warn!("failed to serialize upstream request for provider '{provider_name}': {err}")
         }
     }
+}
+
+fn maybe_log_upstream_response(provider_name: &str, response_body: &str) {
+    let should_log = std::env::var(LOG_UPSTREAM_RESPONSE_ENV)
+        .ok()
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+
+    if !should_log {
+        return;
+    }
+
+    // Truncate very long responses to avoid flooding logs
+    const MAX_LEN: usize = 10000;
+    let display_body = if response_body.len() > MAX_LEN {
+        format!("{}... [truncated, total {} bytes]", &response_body[..MAX_LEN], response_body.len())
+    } else {
+        response_body.to_string()
+    };
+
+    debug!("upstream response from provider '{provider_name}':\n{display_body}");
 }
 
 fn adapter_error_response(err: AdapterError) -> Response<BoxBody> {

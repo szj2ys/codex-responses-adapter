@@ -5,7 +5,7 @@
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::tool_id_manager::normalize_tool_id;
+use crate::translation::normalize_tool_id;
 use crate::types::chat_api::ChatCompletionsResponse;
 use crate::types::chat_api::ChatStreamChunk;
 use crate::types::responses_api::ContentItem;
@@ -22,6 +22,11 @@ use crate::types::responses_api::ResponsesApiResponse;
 ///
 /// Design §3.4: id is prefixed with "resp_" to distinguish from Chat ids.
 pub fn convert_response(chat_resp: &ChatCompletionsResponse) -> ResponsesApiResponse {
+    tracing::debug!(
+        "converting ChatCompletions response to Responses API: id={}, choices_count={}",
+        chat_resp.id,
+        chat_resp.choices.len()
+    );
     let mut output: Vec<ResponseItem> = Vec::new();
 
     if let Some(choice) = chat_resp.choices.first() {

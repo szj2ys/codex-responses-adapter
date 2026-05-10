@@ -8,7 +8,7 @@ mod handler;
 mod providers;
 mod request_converter;
 mod response_converter;
-mod tool_id_manager;
+// mod tool_id_manager; // Deleted - functionality moved to translation.rs
 mod types;
 mod search;
 mod web_search;

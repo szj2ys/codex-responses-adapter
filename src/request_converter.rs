@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::error::AdapterError;
 use crate::providers::ProviderCapabilities;
-use crate::tool_id_manager::normalize_tool_id;
+use crate::translation::normalize_tool_id;
 use crate::types::chat_api::ChatCompletionsRequest;
 use crate::types::chat_api::ChatMessage;
 use crate::types::chat_api::FunctionCall as ChatFunctionCall;
@@ -28,6 +28,12 @@ pub fn convert_request(
     allow_downgrade: bool,
     enable_internal_web_search: bool,
 ) -> Result<ChatCompletionsRequest, AdapterError> {
+    tracing::debug!(
+        "converting Responses API request: model={}, input_items={}, tools_count={}",
+        req.model,
+        req.input.len(),
+        req.tools.len()
+    );
     // Validate: previous_response_id not supported
     if req.previous_response_id.is_some() {
         return Err(AdapterError::UnsupportedFeature(
@@ -332,9 +338,10 @@ fn convert_tools(
                     {
                         build_function_tool(tool)
                     } else {
+                        let tool_json = serde_json::to_string(tool).unwrap_or_else(|_| "<failed to serialize>".to_string());
                         tracing::warn!(
-                            "dropping unconvertible tool type '{}' (missing function or name+parameters)",
-                            tool_type
+                            "dropping unconvertible tool type '{}': missing function or name+parameters. Full tool: {}",
+                            tool_type, tool_json
                         );
                         None
                     }
@@ -357,9 +364,10 @@ fn convert_tools(
                 // Codex interactive mode automatically includes these, but third-party
                 // Chat API providers (GLM, MiniMax) don't support them.
                 other => {
+                    let tool_json = serde_json::to_string(tool).unwrap_or_else(|_| "<failed to serialize>".to_string());
                     tracing::warn!(
-                        "dropping unsupported tool type '{}' (not supported by Chat API providers)",
-                        other
+                        "dropping unsupported tool type '{}': not supported by Chat API providers. Full tool: {}",
+                        other, tool_json
                     );
                     None
                 }
