@@ -1,6 +1,7 @@
 //! codex-responses-adapter: translates OpenAI Responses API → Chat Completions API
 
 mod config;
+mod upstream;
 mod error;
 mod handler;
 mod providers;

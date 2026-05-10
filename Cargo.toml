@@ -13,6 +13,7 @@ name = "codex-responses-adapter"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = "0.1"
 anyhow = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
