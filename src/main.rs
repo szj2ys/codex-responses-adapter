@@ -9,6 +9,7 @@ mod request_converter;
 mod response_converter;
 mod tool_id_manager;
 mod types;
+mod search;
 mod web_search;
 
 use clap::{Parser, Subcommand};
