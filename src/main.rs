@@ -3,6 +3,7 @@
 mod config;
 mod upstream;
 mod translation;
+mod server;
 mod error;
 mod handler;
 mod providers;
