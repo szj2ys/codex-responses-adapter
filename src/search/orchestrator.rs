@@ -1,9 +1,4 @@
 //! Web search orchestration - coordinates search execution strategy.
-//!
-//! Responsible for:
-//! - Provider selection for search
-//! - Result aggregation
-//! - Fallback handling
 
 use crate::config::{WebSearchConfig, WebSearchStrategy, WebSearchBackend};
 use crate::providers::ProviderCapabilities;
@@ -22,16 +17,18 @@ pub enum SearchExecution {
 /// Context for search strategy decisions.
 #[derive(Debug, Clone)]
 pub struct SearchContext {
-    /// Provider capabilities.
     pub capabilities: ProviderCapabilities,
 }
 
 impl SearchContext {
-    /// Create new search context.
     pub fn new(capabilities: ProviderCapabilities) -> Self {
         Self { capabilities }
     }
 }
+
+const ERR_DISABLED: &str = "web_search was requested but [web_search].enabled is false";
+const ERR_NO_PASSTHROUGH_OR_BACKEND: &str = "web_search was requested, but the selected provider does not support /responses passthrough and no adapter-managed backend is implemented yet";
+const ERR_FORCE_BACKEND_NO_BACKEND: &str = "web_search strategy 'force_backend' is configured, but no adapter-managed web_search backend is configured";
 
 /// Determine the search execution strategy based on configuration and provider.
 pub fn determine_strategy(
@@ -39,31 +36,24 @@ pub fn determine_strategy(
     context: &SearchContext,
 ) -> SearchExecution {
     if !config.enabled {
-        return SearchExecution::Unsupported(
-            "web_search was requested but [web_search].enabled is false".to_string(),
-        );
+        return SearchExecution::Unsupported(ERR_DISABLED.to_string());
     }
 
     match config.strategy {
         WebSearchStrategy::PreferPassthrough => {
             if context.capabilities.supports_responses_api {
-                SearchExecution::Passthrough
-            } else if config.backend.is_some() {
-                SearchExecution::AdapterManaged
-            } else {
-                SearchExecution::Unsupported(
-                    "web_search was requested, but the selected provider does not support /responses passthrough and no adapter-managed backend is implemented yet".to_string(),
-                )
+                return SearchExecution::Passthrough;
             }
+            if config.backend.is_some() {
+                return SearchExecution::AdapterManaged;
+            }
+            SearchExecution::Unsupported(ERR_NO_PASSTHROUGH_OR_BACKEND.to_string())
         }
         WebSearchStrategy::ForceBackend => {
             if config.backend.is_some() {
-                SearchExecution::AdapterManaged
-            } else {
-                SearchExecution::Unsupported(
-                    "web_search strategy 'force_backend' is configured, but no adapter-managed web_search backend is configured".to_string(),
-                )
+                return SearchExecution::AdapterManaged;
             }
+            SearchExecution::Unsupported(ERR_FORCE_BACKEND_NO_BACKEND.to_string())
         }
     }
 }

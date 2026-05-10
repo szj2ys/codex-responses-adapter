@@ -1,7 +1,4 @@
 //! HTTP client module for upstream provider communication.
-//!
-//! Provides a trait-based port for testability with InMemoryClient
-//! for unit tests and ReqwestClient for production use.
 
 use crate::error::AdapterError;
 use crate::providers::ProviderCapabilities;
@@ -75,12 +72,10 @@ impl HttpResponse {
 /// HTTP client trait - the testing seam.
 #[async_trait::async_trait]
 pub trait HttpClient: Send + Sync {
-    /// Send an HTTP request and return the response.
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, AdapterError>;
 }
 
 /// In-memory HTTP client for testing.
-/// Records all requests and returns pre-configured responses.
 pub struct InMemoryClient {
     recorded_requests: Arc<Mutex<Vec<HttpRequest>>>,
     responses: Arc<Mutex<Vec<HttpResponse>>>,
@@ -94,17 +89,14 @@ impl InMemoryClient {
         }
     }
 
-    /// Queue a response to be returned on the next request.
     pub fn enqueue_response(&self, response: HttpResponse) {
         self.responses.lock().unwrap().push(response);
     }
 
-    /// Get all recorded requests.
     pub fn recorded_requests(&self) -> Vec<HttpRequest> {
         self.recorded_requests.lock().unwrap().clone()
     }
 
-    /// Get the number of recorded requests.
     pub fn request_count(&self) -> usize {
         self.recorded_requests.lock().unwrap().len()
     }
@@ -142,7 +134,6 @@ pub struct UpstreamProvider<C: HttpClient> {
 }
 
 impl<C: HttpClient> UpstreamProvider<C> {
-    /// Create a new upstream provider.
     pub fn new(
         name: impl Into<String>,
         base_url: impl Into<String>,
@@ -158,19 +149,16 @@ impl<C: HttpClient> UpstreamProvider<C> {
         }
     }
 
-    /// Set the API key.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
         self
     }
 
-    /// Set whether to use incoming auth.
     pub fn with_incoming_auth(mut self, use_incoming: bool) -> Self {
         self.use_incoming_auth = use_incoming;
         self
     }
 
-    /// Send a request to this provider.
     pub async fn send_request(
         &self,
         request: HttpRequest,
@@ -178,7 +166,6 @@ impl<C: HttpClient> UpstreamProvider<C> {
     ) -> Result<HttpResponse, AdapterError> {
         let mut req = request;
 
-        // Inject auth header
         if let Some(auth) = incoming_auth.filter(|_| self.use_incoming_auth) {
             req.headers.insert("Authorization".to_string(), format!("Bearer {}", auth));
         } else if let Some(key) = &self.api_key {
@@ -187,6 +174,92 @@ impl<C: HttpClient> UpstreamProvider<C> {
 
         self.client.send(req).await
     }
+}
+
+/// Configuration for retry behavior.
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    pub max_retries: u32,
+    pub base_delay_ms: u64,
+    pub max_delay_ms: u64,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_delay_ms: 100,
+            max_delay_ms: 5000,
+        }
+    }
+}
+
+impl RetryConfig {
+    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    pub fn with_no_delay(mut self) -> Self {
+        self.base_delay_ms = 0;
+        self.max_delay_ms = 0;
+        self
+    }
+}
+
+/// Send a request with retry logic for transient failures.
+pub async fn send_request_with_retry<C: HttpClient>(
+    client: &C,
+    request: HttpRequest,
+    config: &RetryConfig,
+) -> Result<HttpResponse, AdapterError> {
+    for attempt in 0..=config.max_retries {
+        let response = client.send(request.clone()).await;
+        
+        let (should_retry_request, error) = match response {
+            Ok(resp) if should_retry(resp.status) => {
+                if attempt == config.max_retries {
+                    return Err(AdapterError::UpstreamError {
+                        status: resp.status,
+                        body: String::from_utf8_lossy(&resp.body).to_string(),
+                    });
+                }
+                (true, Some(AdapterError::UpstreamError {
+                    status: resp.status,
+                    body: String::from_utf8_lossy(&resp.body).to_string(),
+                }))
+            }
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                if attempt == config.max_retries {
+                    return Err(e);
+                }
+                (true, Some(e))
+            }
+        };
+
+        if should_retry_request {
+            let delay = calculate_backoff(attempt, config);
+            if delay > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+            }
+            let _ = error;
+        }
+    }
+
+    Err(AdapterError::TransportError("Max retries exceeded".to_string()))
+}
+
+fn should_retry(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
+}
+
+fn calculate_backoff(attempt: u32, config: &RetryConfig) -> u64 {
+    if config.base_delay_ms == 0 {
+        return 0;
+    }
+    let delay = config.base_delay_ms * 2_u64.pow(attempt.min(6));
+    delay.min(config.max_delay_ms)
 }
 
 #[cfg(test)]
@@ -292,101 +365,6 @@ mod auth_tests {
     }
 }
 
-/// Configuration for retry behavior.
-#[derive(Debug, Clone)]
-pub struct RetryConfig {
-    pub max_retries: u32,
-    pub base_delay_ms: u64,
-    pub max_delay_ms: u64,
-}
-
-impl Default for RetryConfig {
-    fn default() -> Self {
-        Self {
-            max_retries: 3,
-            base_delay_ms: 100,
-            max_delay_ms: 5000,
-        }
-    }
-}
-
-impl RetryConfig {
-    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
-        self.max_retries = max_retries;
-        self
-    }
-
-    pub fn with_no_delay(mut self) -> Self {
-        self.base_delay_ms = 0;
-        self.max_delay_ms = 0;
-        self
-    }
-}
-
-/// Send a request with retry logic for transient failures.
-pub async fn send_request_with_retry<C: HttpClient>(
-    client: &C,
-    request: HttpRequest,
-    config: &RetryConfig,
-) -> Result<HttpResponse, AdapterError> {
-    let mut last_error = None;
-    
-    for attempt in 0..=config.max_retries {
-        match client.send(request.clone()).await {
-            Ok(response) => {
-                // Check if it's a retryable status code
-                if should_retry(response.status) {
-                    if attempt < config.max_retries {
-                        last_error = Some(AdapterError::UpstreamError {
-                            status: response.status,
-                            body: String::from_utf8_lossy(&response.body).to_string(),
-                        });
-                        let delay = calculate_backoff(attempt, config);
-                        if delay > 0 {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                        }
-                        continue;
-                    } else {
-                        // Last attempt failed with retryable status
-                        return Err(AdapterError::UpstreamError {
-                            status: response.status,
-                            body: String::from_utf8_lossy(&response.body).to_string(),
-                        });
-                    }
-                }
-                return Ok(response);
-            }
-            Err(e) => {
-                if attempt < config.max_retries {
-                    last_error = Some(e);
-                    let delay = calculate_backoff(attempt, config);
-                    if delay > 0 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                    }
-                } else {
-                    return Err(e);
-                }
-            }
-        }
-    }
-    
-    Err(last_error.unwrap_or_else(|| {
-        AdapterError::TransportError("Max retries exceeded".to_string())
-    }))
-}
-
-fn should_retry(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
-}
-
-fn calculate_backoff(attempt: u32, config: &RetryConfig) -> u64 {
-    if config.base_delay_ms == 0 {
-        return 0;
-    }
-    let delay = config.base_delay_ms * 2_u64.pow(attempt.min(6)); // Cap at 2^6 = 64x
-    delay.min(config.max_delay_ms)
-}
-
 #[cfg(test)]
 mod retry_tests {
     use super::*;
@@ -394,7 +372,6 @@ mod retry_tests {
     #[tokio::test]
     async fn test_retry_on_server_error() {
         let client = InMemoryClient::new();
-        // First two calls fail with 503, third succeeds
         client.enqueue_response(HttpResponse::new(503));
         client.enqueue_response(HttpResponse::new(503));
         client.enqueue_response(HttpResponse::new(200).with_body(b"success".to_vec()));
@@ -440,7 +417,6 @@ mod retry_tests {
     #[tokio::test]
     async fn test_returns_last_error_after_max_retries() {
         let client = InMemoryClient::new();
-        // All calls fail
         client.enqueue_response(HttpResponse::new(503));
         client.enqueue_response(HttpResponse::new(503));
         client.enqueue_response(HttpResponse::new(503));
@@ -454,11 +430,10 @@ mod retry_tests {
         let result = send_request_with_retry(&client, request, &config).await;
         
         assert!(result.is_err());
-        assert_eq!(client.request_count(), 3); // initial + 2 retries
+        assert_eq!(client.request_count(), 3);
     }
 }
 
-// Production HTTP client using reqwest
 #[cfg(not(test))]
 use reqwest::Client as ReqwestClient;
 
@@ -468,7 +443,6 @@ pub struct ReqwestHttpClient {
 }
 
 impl ReqwestHttpClient {
-    /// Create a new ReqwestHttpClient with default settings.
     pub fn new() -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
@@ -476,7 +450,6 @@ impl ReqwestHttpClient {
         Ok(Self { client })
     }
 
-    /// Create a new ReqwestHttpClient with custom timeout.
     pub fn with_timeout(seconds: u64) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(seconds))
