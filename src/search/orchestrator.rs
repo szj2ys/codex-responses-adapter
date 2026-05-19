@@ -95,6 +95,7 @@ mod tests {
             supports_system_role: true,
             requires_single_leading_system_message: false,
             max_context_tokens: None,
+            supports_strict_tool_schema: false,
         }
     }
 
