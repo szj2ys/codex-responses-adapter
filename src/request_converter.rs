@@ -43,11 +43,23 @@ pub fn convert_request(
     }
 
     // Validate streaming against provider capability
-    if req.stream && !capabilities.supports_streaming {
-        return Err(AdapterError::CapabilityNotAvailable(
-            "streaming is not supported by this provider".into(),
-        ));
-    }
+    // When allow_downgrade is true, silently downgrade streaming to non-streaming
+    // instead of rejecting the request. This prevents LiteLLM fallback chains
+    // that route to geo-blocked providers (e.g., Vertex AI in China).
+    let effective_stream = if req.stream && !capabilities.supports_streaming {
+        if allow_downgrade {
+            tracing::warn!(
+                "provider does not support streaming; downgrading to non-streaming"
+            );
+            false
+        } else {
+            return Err(AdapterError::CapabilityNotAvailable(
+                "streaming is not supported by this provider".into(),
+            ));
+        }
+    } else {
+        req.stream
+    };
 
     let mut messages: Vec<ChatMessage> = Vec::new();
     let mut leading_system_segments: Vec<String> = Vec::new();
@@ -168,7 +180,7 @@ pub fn convert_request(
             ));
         }
     } else {
-        let converted = convert_tools(&req.tools, enable_internal_web_search)?;
+        let converted = convert_tools(&req.tools, enable_internal_web_search, capabilities.supports_strict_tool_schema)?;
         if converted.is_empty() {
             None
         } else {
@@ -200,7 +212,7 @@ pub fn convert_request(
         messages,
         tools,
         tool_choice,
-        stream: req.stream,
+        stream: effective_stream,
         parallel_tool_calls,
     })
 }
@@ -297,8 +309,22 @@ fn content_items_to_text(items: &[ContentItem]) -> Option<String> {
 /// ```json
 /// { "type": "function", "function": { "name": "get_weather", "description": "...", "parameters": {...}, "strict": true } }
 /// ```
-fn build_function_tool(tool: &Value) -> Option<Value> {
+///
+/// When `supports_strict_tool_schema` is false, the `strict` field is stripped
+/// because many providers (GLM, MiniMax, mimo, etc.) reject it with "Param Incorrect".
+fn build_function_tool(tool: &Value, supports_strict: bool) -> Option<Value> {
     if let Some(function_obj) = tool.get("function") {
+        // Already in nested format — strip strict if unsupported.
+        if !supports_strict {
+            if let Some(obj) = function_obj.as_object() {
+                let mut cleaned = obj.clone();
+                cleaned.remove("strict");
+                return Some(json!({
+                    "type": "function",
+                    "function": Value::Object(cleaned)
+                }));
+            }
+        }
         return Some(json!({
             "type": "function",
             "function": function_obj.clone()
@@ -306,9 +332,15 @@ fn build_function_tool(tool: &Value) -> Option<Value> {
     }
 
     let mut function_obj = serde_json::Map::new();
-    for field in ["name", "description", "parameters", "strict"] {
+    for field in ["name", "description", "parameters"] {
         if let Some(v) = tool.get(field) {
             function_obj.insert(field.to_string(), v.clone());
+        }
+    }
+    // Only include strict if the provider supports it.
+    if supports_strict {
+        if let Some(v) = tool.get("strict") {
+            function_obj.insert("strict".to_string(), v.clone());
         }
     }
 
@@ -321,6 +353,7 @@ fn build_function_tool(tool: &Value) -> Option<Value> {
 fn convert_tools(
     tools: &[Value],
     enable_internal_web_search: bool,
+    supports_strict_tool_schema: bool,
 ) -> Result<Vec<Value>, AdapterError> {
     let converted: Vec<Value> = tools
         .iter()
@@ -331,12 +364,12 @@ fn convert_tools(
                 .unwrap_or("function");
 
             match tool_type {
-                "function" => build_function_tool(tool),
+                "function" => build_function_tool(tool, supports_strict_tool_schema),
                 "custom" | "namespace" => {
                     if tool.get("function").is_some()
                         || (tool.get("name").is_some() && tool.get("parameters").is_some())
                     {
-                        build_function_tool(tool)
+                        build_function_tool(tool, supports_strict_tool_schema)
                     } else {
                         let tool_json = serde_json::to_string(tool).unwrap_or_else(|_| "<failed to serialize>".to_string());
                         tracing::warn!(
@@ -583,7 +616,8 @@ mod tests {
         assert_eq!(tool["type"], "function");
         assert!(tool.get("function").is_some());
         assert_eq!(tool["function"]["name"], "get_weather");
-        assert_eq!(tool["function"]["strict"], true);
+        // strict is stripped because glm_caps has supports_strict_tool_schema=false
+        assert!(tool["function"].get("strict").is_none());
     }
 
     #[test]
@@ -793,12 +827,13 @@ mod tests {
             "strict": true
         })];
 
-        let result = convert_tools(&tools, false).unwrap();
+        let result = convert_tools(&tools, false, false).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["type"], "function");
         assert_eq!(result[0]["function"]["name"], "mcp_fetch");
         assert_eq!(result[0]["function"]["description"], "Fetch a URL");
-        assert_eq!(result[0]["function"]["strict"], true);
+        // strict is stripped because supports_strict_tool_schema=false
+        assert!(result[0]["function"].get("strict").is_none());
         assert!(result[0]["function"]["parameters"].is_object());
     }
 
@@ -818,7 +853,7 @@ mod tests {
             }
         })];
 
-        let result = convert_tools(&tools, false).unwrap();
+        let result = convert_tools(&tools, false, false).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["type"], "function");
         assert_eq!(result[0]["function"]["name"], "get_weather");
@@ -833,7 +868,7 @@ mod tests {
             json!({ "type": "namespace", "description": "missing name and params" }),
         ];
 
-        let result = convert_tools(&tools, false).unwrap();
+        let result = convert_tools(&tools, false, false).unwrap();
         assert!(result.is_empty());
 
         assert!(logs_contain("dropping unconvertible tool type 'custom'"));
@@ -848,7 +883,7 @@ mod tests {
             json!({ "type": "computer_use_preview" }),
         ];
 
-        let result = convert_tools(&tools, false).unwrap();
+        let result = convert_tools(&tools, false, false).unwrap();
         assert!(result.is_empty());
 
         assert!(logs_contain("dropping unsupported tool type 'file_search'"));

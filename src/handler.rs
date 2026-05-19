@@ -526,7 +526,10 @@ async fn handle_responses(
                     }
                 };
 
-            if is_streaming {
+            // Use chat_req.stream (which may have been downgraded from streaming
+            // to non-streaming by the request converter) instead of the original
+            // is_streaming flag.
+            if chat_req.stream {
                 return handle_streaming(upstream_resp).await;
             } else {
                 return handle_non_streaming(upstream_resp, &route.provider).await;
