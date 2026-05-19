@@ -5,3 +5,4 @@ target
 .DS_Store
 adapter.toml
 .codex-responses-adapter.toml
+codex-responses-adapter.toml

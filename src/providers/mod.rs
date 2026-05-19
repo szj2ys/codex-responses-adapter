@@ -29,6 +29,10 @@ pub struct ProviderCapabilities {
     pub requires_single_leading_system_message: bool,
     /// Maximum context window (tokens), if known.
     pub max_context_tokens: Option<u32>,
+    /// Whether the provider supports the `strict` field in tool/function definitions.
+    /// When false, `strict` is stripped from tool definitions before sending.
+    /// OpenAI supports this; most other providers do not.
+    pub supports_strict_tool_schema: bool,
 }
 
 /// Known provider presets.
@@ -38,6 +42,8 @@ pub enum ProviderKind {
     Glm,
     Minimax,
     Vllm,
+    /// Mimo (Vertex AI) - does not support parallel_tool_calls
+    Mimo,
     Custom,
 }
 
@@ -48,6 +54,7 @@ impl ProviderKind {
             "glm" => Self::Glm,
             "minimax" => Self::Minimax,
             "vllm" => Self::Vllm,
+            "mimo" => Self::Mimo,
             _ => Self::Custom,
         }
     }
@@ -64,6 +71,7 @@ impl ProviderKind {
                 supports_system_role: true,
                 requires_single_leading_system_message: false,
                 max_context_tokens: Some(400_000),
+                supports_strict_tool_schema: true,
             },
             Self::Glm => ProviderCapabilities {
                 supports_responses_api: false,
@@ -74,6 +82,7 @@ impl ProviderKind {
                 supports_system_role: true,
                 requires_single_leading_system_message: false,
                 max_context_tokens: Some(128_000),
+                supports_strict_tool_schema: false,
             },
             Self::Minimax => ProviderCapabilities {
                 supports_responses_api: false,
@@ -84,6 +93,7 @@ impl ProviderKind {
                 supports_system_role: true,
                 requires_single_leading_system_message: true,
                 max_context_tokens: Some(256_000),
+                supports_strict_tool_schema: false,
             },
             Self::Vllm => ProviderCapabilities {
                 supports_responses_api: false,
@@ -94,6 +104,18 @@ impl ProviderKind {
                 supports_system_role: true,
                 requires_single_leading_system_message: false,
                 max_context_tokens: None,
+                supports_strict_tool_schema: false,
+            },
+            Self::Mimo => ProviderCapabilities {
+                supports_responses_api: false,
+                supports_tools: true,
+                supports_tool_choice_auto: true,
+                supports_parallel_tool_calls: false,
+                supports_streaming: false,
+                supports_system_role: true,
+                requires_single_leading_system_message: false,
+                max_context_tokens: None,
+                supports_strict_tool_schema: false,
             },
             Self::Custom => ProviderCapabilities {
                 supports_responses_api: false,
@@ -104,6 +126,7 @@ impl ProviderKind {
                 supports_system_role: true,
                 requires_single_leading_system_message: false,
                 max_context_tokens: None,
+                supports_strict_tool_schema: false,
             },
         }
     }

@@ -5,6 +5,7 @@
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::translation::normalize_tool_id;
 use crate::types::chat_api::ChatCompletionsResponse;
 use crate::types::chat_api::ChatStreamChunk;
 use crate::types::responses_api::ContentItem;
@@ -21,6 +22,11 @@ use crate::types::responses_api::ResponsesApiResponse;
 ///
 /// Design §3.4: id is prefixed with "resp_" to distinguish from Chat ids.
 pub fn convert_response(chat_resp: &ChatCompletionsResponse) -> ResponsesApiResponse {
+    tracing::debug!(
+        "converting ChatCompletions response to Responses API: id={}, choices_count={}",
+        chat_resp.id,
+        chat_resp.choices.len()
+    );
     let mut output: Vec<ResponseItem> = Vec::new();
 
     if let Some(choice) = chat_resp.choices.first() {
@@ -47,7 +53,7 @@ pub fn convert_response(chat_resp: &ChatCompletionsResponse) -> ResponsesApiResp
                     id: Some(format!("fc_{}", Uuid::new_v4())),
                     name: tc.function.name.clone(),
                     arguments: tc.function.arguments.clone(),
-                    call_id: tc.id.clone(),
+                    call_id: normalize_tool_id(&tc.id),
                 });
             }
         }
@@ -308,7 +314,7 @@ impl StreamTranslator {
                 "id": format!("fc_{}", Uuid::new_v4()),
                 "name": tc.name,
                 "arguments": tc.arguments,
-                "call_id": tc.id,
+                "call_id": normalize_tool_id(&tc.id),
             });
             let event = json!({
                 "type": "response.output_item.done",
@@ -451,7 +457,89 @@ mod tests {
     use crate::types::chat_api::ChoiceMessage;
     use crate::types::chat_api::StreamChoice;
     use crate::types::chat_api::StreamDelta;
+    use crate::types::chat_api::StreamFunctionCall;
+    use crate::types::chat_api::StreamToolCall;
     use crate::types::chat_api::Usage;
+
+    #[test]
+    fn test_streaming_tool_call_empty_id_gets_synthetic() {
+        let mut translator = StreamTranslator::new();
+
+        // First chunk: tool call delta with NO id (simulates GLM/MiniMax behavior)
+        let first = ChatStreamChunk {
+            id: "chatcmpl-tool".to_string(),
+            choices: vec![StreamChoice {
+                index: 0,
+                delta: StreamDelta {
+                    role: Some("assistant".to_string()),
+                    content: None,
+                    tool_calls: Some(vec![StreamToolCall {
+                        index: 0,
+                        id: None, // Empty/missing ID
+                        call_type: Some("function".to_string()),
+                        function: Some(StreamFunctionCall {
+                            name: Some("shell".to_string()),
+                            arguments: Some(r#"{"cmd":"ls"}"#.to_string()),
+                        }),
+                    }]),
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+            model: None,
+        };
+
+        // Second chunk: finish the tool call
+        let second = ChatStreamChunk {
+            id: "chatcmpl-tool".to_string(),
+            choices: vec![StreamChoice {
+                index: 0,
+                delta: StreamDelta {
+                    role: None,
+                    content: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some("tool_calls".to_string()),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+            }),
+            model: None,
+        };
+
+        let _first_events = translator.process_chunk(&first);
+        let second_events = translator.process_chunk(&second);
+
+        // Find the function_call output_item.done event
+        let function_call_event = second_events
+            .iter()
+            .find(|e| e.contains("function_call") && e.contains("output_item.done"))
+            .expect("should have function_call output_item.done event");
+
+        // Extract the call_id from the event
+        let call_id: serde_json::Value = serde_json::from_str(
+            &function_call_event
+                .lines()
+                .find(|l| l.starts_with("data:"))
+                .unwrap()
+                .trim_start_matches("data: "),
+        )
+        .unwrap();
+
+        let call_id_str = call_id["item"]["call_id"].as_str().unwrap();
+        assert!(
+            !call_id_str.is_empty(),
+            "call_id should not be empty, got: {:?}",
+            call_id_str
+        );
+        assert!(
+            call_id_str.starts_with("call_"),
+            "synthetic call_id should start with 'call_', got: {}",
+            call_id_str
+        );
+    }
 
     #[test]
     fn test_convert_text_response() {
@@ -546,6 +634,50 @@ mod tests {
             ResponseItem::FunctionCall { name, call_id, .. } => {
                 assert_eq!(name, "shell");
                 assert_eq!(call_id, "call_abc");
+            }
+            other => panic!("expected FunctionCall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_convert_tool_call_empty_id_gets_synthetic() {
+        let chat_resp = ChatCompletionsResponse {
+            id: "chatcmpl-empty-id".to_string(),
+            choices: vec![Choice {
+                index: 0,
+                message: ChoiceMessage {
+                    role: "assistant".to_string(),
+                    content: None,
+                    tool_calls: Some(vec![crate::types::chat_api::ToolCall {
+                        id: "".to_string(), // Empty ID - simulates GLM/MiniMax behavior
+                        call_type: "function".to_string(),
+                        function: crate::types::chat_api::FunctionCall {
+                            name: "shell".to_string(),
+                            arguments: r#"{"cmd":"ls"}"#.to_string(),
+                        },
+                    }]),
+                },
+                finish_reason: Some("tool_calls".to_string()),
+            }],
+            usage: None,
+            model: None,
+        };
+
+        let resp = convert_response(&chat_resp);
+        assert_eq!(resp.output.len(), 1);
+        match &resp.output[0] {
+            ResponseItem::FunctionCall { name, call_id, .. } => {
+                assert_eq!(name, "shell");
+                assert!(
+                    !call_id.is_empty(),
+                    "call_id should not be empty, got: {:?}",
+                    call_id
+                );
+                assert!(
+                    call_id.starts_with("call_"),
+                    "synthetic call_id should start with 'call_', got: {}",
+                    call_id
+                );
             }
             other => panic!("expected FunctionCall, got {:?}", other),
         }

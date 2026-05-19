@@ -1,0 +1,8 @@
+/target
+/.git
+/.github
+/docs
+/scripts
+.DS_Store
+*.md
+!README.md

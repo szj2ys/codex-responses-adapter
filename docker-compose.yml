@@ -1,0 +1,16 @@
+services:
+  adapter:
+    build: .
+    ports:
+      - "6789:6789"
+    volumes:
+      - ./codex-responses-adapter.toml:/app/config.toml:ro
+    command: ["--config", "/app/config.toml"]
+    restart: unless-stopped
+    environment:
+      # 开启上游请求日志（查看发送到 provider 的完整请求体）
+      - CHAT_ADAPTER_PROXY_LOG_UPSTREAM_REQUEST=1
+      # 开启上游响应日志（查看 provider 返回的完整响应体）
+      - CHAT_ADAPTER_PROXY_LOG_UPSTREAM_RESPONSE=1
+      # 日志级别: error/warn/info/debug/trace
+      - RUST_LOG=info
